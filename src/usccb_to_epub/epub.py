@@ -260,7 +260,7 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
         <p class=\"reading-source\"><a href=\"{escape(readings.source_url)}\">USCCB source page</a></p>
       </header>
       <section class=\"chapter-list\">
-        <h2>Chapters</h2>
+        <h2>Readings</h2>
         <ol>
           {''.join(chapter_items)}
         </ol>
