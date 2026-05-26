@@ -1,0 +1,2 @@
+[console_scripts]
+usccb-to-epub = usccb_to_epub.cli:main

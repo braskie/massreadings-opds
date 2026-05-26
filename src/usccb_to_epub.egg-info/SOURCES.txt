@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/usccb_to_epub/__init__.py
+src/usccb_to_epub/__main__.py
+src/usccb_to_epub/cli.py
+src/usccb_to_epub/epub.py
+src/usccb_to_epub/scraper.py
+src/usccb_to_epub/server.py
+src/usccb_to_epub.egg-info/PKG-INFO
+src/usccb_to_epub.egg-info/SOURCES.txt
+src/usccb_to_epub.egg-info/dependency_links.txt
+src/usccb_to_epub.egg-info/entry_points.txt
+src/usccb_to_epub.egg-info/requires.txt
+src/usccb_to_epub.egg-info/top_level.txt

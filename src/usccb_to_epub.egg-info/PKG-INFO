@@ -1,0 +1,35 @@
+Metadata-Version: 2.4
+Name: usccb-to-epub
+Version: 0.1.0
+Summary: Scrape USCCB daily mass readings, build EPUB files, and serve them through OPDS
+Author: GitHub Copilot
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: curl-cffi>=0.15.0
+
+# USCCB to EPUB
+
+Scrape the USCCB daily mass readings page, build EPUB files, and serve them in an OPDS catalog.
+
+## Usage
+
+Build today's readings:
+
+```bash
+python -m usccb_to_epub build
+```
+
+Build a specific date:
+
+```bash
+python -m usccb_to_epub build --date 2026-05-31
+```
+
+Serve an OPDS catalog:
+
+```bash
+python -m usccb_to_epub serve --host 127.0.0.1 --port 8000
+```
+
+The catalog is available at `/opds.xml`, and generated EPUB files are served from `/books/`.
