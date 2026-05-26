@@ -48,7 +48,7 @@ class LibraryStore:
         epub_path = self.epub_path_for_metadata(metadata_path)
         if metadata_path.exists() and epub_path.exists():
             return epub_path
-        readings = fetch_readings(reading_date)
+        readings = fetch_readings(reading_date, cache_dir=self.root)
         files = build_book_files(readings, self.root)
         return files.epub_path
 

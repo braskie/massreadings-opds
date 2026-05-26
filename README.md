@@ -37,6 +37,8 @@ Build today's readings:
 python -m usccb_to_epub build
 ```
 
+If a matching `data/library/YYYY-MM-DD.json` metadata file already exists, the build reuses cached readings metadata instead of requesting the USCCB page again.
+
 Build a specific date:
 
 ```bash
