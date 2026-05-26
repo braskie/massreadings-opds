@@ -6,6 +6,7 @@ src/usccb_to_epub/cli.py
 src/usccb_to_epub/epub.py
 src/usccb_to_epub/scraper.py
 src/usccb_to_epub/server.py
+src/usccb_to_epub/sync.py
 src/usccb_to_epub.egg-info/PKG-INFO
 src/usccb_to_epub.egg-info/SOURCES.txt
 src/usccb_to_epub.egg-info/dependency_links.txt
