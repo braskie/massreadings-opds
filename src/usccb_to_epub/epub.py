@@ -6,7 +6,7 @@ import re
 import uuid
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from html import escape
 from pathlib import Path
 
@@ -19,13 +19,6 @@ from .scraper import MassReadings, ReadingSection, text_to_simple_html
 class BookFiles:
     epub_path: Path
     metadata_path: Path
-
-
-CATEGORY_LABELS = {
-    "daily": "Daily Readings",
-    "sunday": "Sunday Readings",
-    "special-optional": "Special/Optional Readings",
-}
 
 
 def slugify(value: str) -> str:
@@ -232,6 +225,10 @@ def split_cover_title(title: str, max_chars: int = 28) -> list[str]:
     return lines[:4]
 
 
+def format_reading_date(value: date) -> str:
+    return f"{value.strftime('%B')} {value.day}, {value.year}"
+
+
 def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str, object]]) -> str:
     chapter_items = []
     for chapter in chapter_docs:
@@ -240,9 +237,6 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
         )
 
     lectionary_html = f"<p class=\"reading-meta\">Lectionary: {escape(readings.lectionary or 'N/A')}</p>" if readings.lectionary else ""
-    categories_html = "".join(
-        f"<li>{escape(CATEGORY_LABELS.get(category, category.title()))}</li>" for category in readings.categories
-    )
 
     return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">
@@ -254,10 +248,8 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
     <article class=\"title-page\">
       <header class=\"title-page-header\">
         <h1 class=\"mass-name\">{escape(readings.title)}</h1>
-        <p class=\"reading-date\">{escape(readings.reading_date.isoformat())}</p>
+        <p class=\"reading-date\">{escape(format_reading_date(readings.reading_date))}</p>
         {lectionary_html}
-        <ul class=\"reading-categories\">{categories_html}</ul>
-        <p class=\"reading-source\"><a href=\"{escape(readings.source_url)}\">USCCB source page</a></p>
       </header>
       <section class=\"chapter-list\">
         <h2>Readings</h2>
@@ -282,7 +274,6 @@ def render_chapter_xhtml(readings: MassReadings, section: ReadingSection) -> str
   <body>
     <article class=\"reading-book\">
       <header>
-        <p class=\"reading-date\">Mass Date: {escape(readings.reading_date.isoformat())}</p>
         <h1>{escape(section.heading)}</h1>
       </header>
       <section class=\"reading-section\">
@@ -413,13 +404,10 @@ header {
 .reading-date {
   color: #666;
   font-size: 0.95em;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .reading-meta,
-.reading-citation,
-.reading-source {
+.reading-citation {
   color: #555;
   font-size: 0.95em;
 }
@@ -428,12 +416,6 @@ header {
   font-size: 2.1em;
   font-style: italic;
   margin: 0.2em 0;
-}
-
-.reading-categories {
-  color: #555;
-  font-size: 0.95em;
-  padding-left: 1.2em;
 }
 
 .reading-citation {
