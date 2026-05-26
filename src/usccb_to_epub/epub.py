@@ -264,7 +264,10 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
 
 
 def render_chapter_xhtml(readings: MassReadings, section: ReadingSection) -> str:
-    text_html = section.html or text_to_html(section.text, section.heading)
+    if section.heading in {"Responsorial Psalm", "Alleluia"} and section.text:
+        text_html = text_to_html(section.text, section.heading)
+    else:
+        text_html = section.html or text_to_html(section.text, section.heading)
     return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">
   <head>
