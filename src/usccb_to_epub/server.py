@@ -23,6 +23,7 @@ CATEGORY_GROUPS = (
     ("Sunday Readings", "sunday"),
     ("Special/Optional Readings", "special-optional"),
 )
+OPDS_ROOT_FEED_PATH = "/opds.xml"
 
 
 @dataclass(frozen=True)
@@ -106,8 +107,9 @@ class OPDSRequestHandler(BaseHTTPRequestHandler):
             self.respond_html(self.render_index())
             return
 
-        if path == "/opds.xml":
-            self.respond_xml(self.render_opds_feed())
+        category = opds_category_from_path(path)
+        if category is not False:
+            self.respond_xml(self.render_opds_feed(category))
             return
 
         if path.startswith("/books/"):
@@ -166,10 +168,10 @@ class OPDSRequestHandler(BaseHTTPRequestHandler):
         records = self.library.list_records()
         return render_index_html(records, opds_href="/opds.xml", book_base_href="/books", include_generate=True)
 
-    def render_opds_feed(self) -> str:
+    def render_opds_feed(self, category: str | None) -> str:
         records = self.library.list_records()
         base_url = self.base_url()
-        return render_opds_feed_xml(records, base_url=base_url)
+        return render_opds_feed_xml(records, base_url=base_url, category=category)
 
     def base_url(self) -> str:
         host = self.headers.get("Host") or f"{self.server.server_address[0]}:{self.server.server_address[1]}"
@@ -197,6 +199,27 @@ def grouped_records(records: list[LibraryRecord]) -> list[tuple[str, list[Librar
         group_records = [record for record in records if category in record.categories]
         grouped.append((title, group_records))
     return grouped
+
+
+def opds_category_from_path(path: str) -> str | None | bool:
+    if path == OPDS_ROOT_FEED_PATH:
+        return None
+
+    for _, category in CATEGORY_GROUPS:
+        if path == opds_feed_path(category):
+            return category
+
+    return False
+
+
+def opds_feed_path(category: str | None) -> str:
+    if category is None:
+        return OPDS_ROOT_FEED_PATH
+    return f"/opds-{category}.xml"
+
+
+def title_with_date(record: LibraryRecord) -> str:
+    return f"{record.reading_date} - {record.title}"
 
 
 def infer_categories(reading_date: str, special_optional: bool) -> tuple[str, ...]:
@@ -259,7 +282,7 @@ def render_index_html(
 """
 
 
-def render_opds_feed_xml(records: list[LibraryRecord], base_url: str) -> str:
+def render_opds_feed_xml(records: list[LibraryRecord], base_url: str, category: str | None = None) -> str:
     updated = max(
         (record.generated_at for record in records),
         default=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -277,14 +300,34 @@ def render_opds_feed_xml(records: list[LibraryRecord], base_url: str) -> str:
         f"{{{ATOM_NS}}}link",
         {
             "rel": "self",
-            "href": f"{clean_base_url}/opds.xml",
-            "type": "application/atom+xml;profile=opds-catalog;kind=acquisition",
+            "href": f"{clean_base_url}{opds_feed_path(category)}",
+            "type": "application/atom+xml;profile=opds-catalog;kind=navigation"
+            if category is None
+            else "application/atom+xml;profile=opds-catalog;kind=acquisition",
         },
     )
 
-    for record in records:
+    if category is None:
+        for label, group_category in CATEGORY_GROUPS:
+            entry = ET.SubElement(feed, f"{{{ATOM_NS}}}entry")
+            ET.SubElement(entry, f"{{{ATOM_NS}}}title").text = label
+            ET.SubElement(entry, f"{{{ATOM_NS}}}id").text = f"urn:uuid:opds:{group_category}"
+            ET.SubElement(entry, f"{{{ATOM_NS}}}updated").text = updated
+            ET.SubElement(
+                entry,
+                f"{{{ATOM_NS}}}link",
+                {
+                    "rel": "subsection",
+                    "href": f"{clean_base_url}{opds_feed_path(group_category)}",
+                    "type": "application/atom+xml;profile=opds-catalog;kind=acquisition",
+                },
+            )
+        return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(feed, encoding="unicode")
+
+    category_records = [record for record in records if category in record.categories]
+    for record in category_records:
         entry = ET.SubElement(feed, f"{{{ATOM_NS}}}entry")
-        ET.SubElement(entry, f"{{{ATOM_NS}}}title").text = record.title
+        ET.SubElement(entry, f"{{{ATOM_NS}}}title").text = title_with_date(record)
         ET.SubElement(entry, f"{{{ATOM_NS}}}id").text = record.entry_id
         ET.SubElement(entry, f"{{{ATOM_NS}}}updated").text = record.generated_at
         ET.SubElement(entry, f"{{{ATOM_NS}}}summary").text = record.summary
@@ -340,9 +383,14 @@ def publish_static_opds(library_dir: Path, output_dir: Path, site_url: str) -> t
         copied += 1
 
     output_dir.joinpath("opds.xml").write_text(
-        render_opds_feed_xml(records, base_url=site_url),
+        render_opds_feed_xml(records, base_url=site_url, category=None),
         encoding="utf-8",
     )
+    for _, category in CATEGORY_GROUPS:
+        output_dir.joinpath(opds_feed_path(category).removeprefix("/")).write_text(
+            render_opds_feed_xml(records, base_url=site_url, category=category),
+            encoding="utf-8",
+        )
     output_dir.joinpath("index.html").write_text(
         render_index_html(records, opds_href="opds.xml", book_base_href="books", include_generate=False),
         encoding="utf-8",
