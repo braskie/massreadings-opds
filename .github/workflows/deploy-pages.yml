@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '0 9 * * *'
 
 permissions:
   contents: read
@@ -29,21 +31,8 @@ jobs:
       - name: Install package
         run: python -m pip install -e .
 
-      - name: Build the next 2 weeks of readings
-        run: |
-          python - <<'PY'
-          from datetime import date, timedelta
-          from pathlib import Path
-
-          from usccb_to_epub.epub import build_book_files
-          from usccb_to_epub.scraper import fetch_readings
-
-          library_dir = Path('data/library')
-          for offset in range(14):
-              reading_date = date.today() + timedelta(days=offset)
-              readings = fetch_readings(reading_date, cache_dir=library_dir)
-              build_book_files(readings, library_dir)
-          PY
+      - name: Sync rolling readings window
+        run: python -m usccb_to_epub sync
 
       - name: Build static OPDS site
         env:

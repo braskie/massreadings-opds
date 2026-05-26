@@ -6,19 +6,26 @@ import re
 import uuid
 import zipfile
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .scraper import MassReadings, ReadingSection
+from .scraper import MassReadings, ReadingSection, text_to_simple_html
 
 
 @dataclass(frozen=True)
 class BookFiles:
     epub_path: Path
     metadata_path: Path
+
+
+CATEGORY_LABELS = {
+    "daily": "Daily Readings",
+    "sunday": "Sunday Readings",
+    "special-optional": "Special/Optional Readings",
+}
 
 
 def slugify(value: str) -> str:
@@ -28,33 +35,55 @@ def slugify(value: str) -> str:
 
 
 def build_book_files(readings: MassReadings, output_dir: Path) -> BookFiles:
+    return build_book_files_for_date([readings], output_dir)[0]
+
+
+def build_book_files_for_date(readings_items: list[MassReadings], output_dir: Path) -> list[BookFiles]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    slug = slugify(readings.title)
-    epub_path = output_dir / f"{readings.reading_date.isoformat()}-{slug}.epub"
-    metadata_path = output_dir / f"{readings.reading_date.isoformat()}.json"
     generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+    used_slugs: set[str] = set()
+    files: list[BookFiles] = []
 
-    write_epub(readings, epub_path, generated_at)
-    metadata = build_metadata(readings, epub_path.name, generated_at)
-    metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    for readings in readings_items:
+        base_slug = f"{readings.reading_date.isoformat()}-{slugify(readings.title)}"
+        artifact_slug = unique_slug(base_slug, used_slugs)
+        epub_path = output_dir / f"{artifact_slug}.epub"
+        metadata_path = output_dir / f"{artifact_slug}.json"
+        write_epub(readings, epub_path, generated_at)
+        metadata = build_metadata(readings, artifact_slug=artifact_slug, epub_filename=epub_path.name, generated_at=generated_at)
+        metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        files.append(BookFiles(epub_path=epub_path, metadata_path=metadata_path))
 
-    return BookFiles(epub_path=epub_path, metadata_path=metadata_path)
+    return files
 
 
-def build_metadata(readings: MassReadings, epub_filename: str, generated_at: datetime) -> dict[str, object]:
+def unique_slug(base_slug: str, used_slugs: set[str]) -> str:
+    slug = base_slug
+    counter = 2
+    while slug in used_slugs:
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+    used_slugs.add(slug)
+    return slug
+
+
+def build_metadata(readings: MassReadings, *, artifact_slug: str, epub_filename: str, generated_at: datetime) -> dict[str, object]:
     return {
         "date": readings.reading_date.isoformat(),
         "title": readings.title,
+        "slug": artifact_slug,
         "lectionary": readings.lectionary,
         "source_url": readings.source_url,
         "epub_file": epub_filename,
         "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "categories": list(readings.categories),
         "sections": [
             {
                 "heading": section.heading,
                 "source_label": section.source_label,
                 "source_url": section.source_url,
                 "text": section.text,
+                "html": section.html,
             }
             for section in readings.sections
         ],
@@ -62,12 +91,12 @@ def build_metadata(readings: MassReadings, epub_filename: str, generated_at: dat
 
 
 def write_epub(readings: MassReadings, epub_path: Path, generated_at: datetime) -> None:
-    epub_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{readings.source_url}|{readings.reading_date.isoformat()}")
+    epub_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{readings.source_url}|{readings.reading_date.isoformat()}|{readings.title}")
     chapter_docs = build_chapter_documents(readings)
     cover_image = render_cover_image(readings)
     cover_page_xhtml = render_cover_page_xhtml(readings)
     title_page_xhtml = render_title_page_xhtml(readings, chapter_docs)
-    nav_xhtml = render_nav_xhtml(readings)
+    nav_xhtml = render_nav_xhtml(readings, chapter_docs)
     stylesheet = render_stylesheet()
     content_opf = render_content_opf(readings, epub_id, generated_at, chapter_docs)
     container_xml = render_container_xml()
@@ -211,6 +240,9 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
         )
 
     lectionary_html = f"<p class=\"reading-meta\">Lectionary: {escape(readings.lectionary or 'N/A')}</p>" if readings.lectionary else ""
+    categories_html = "".join(
+        f"<li>{escape(CATEGORY_LABELS.get(category, category.title()))}</li>" for category in readings.categories
+    )
 
     return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">
@@ -221,8 +253,10 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
   <body>
     <article class=\"title-page\">
       <header class=\"title-page-header\">
-        <h1 class="mass-name">{escape(readings.title)}</h1>
+        <h1 class=\"mass-name\">{escape(readings.title)}</h1>
+        <p class=\"reading-date\">{escape(readings.reading_date.isoformat())}</p>
         {lectionary_html}
+        <ul class=\"reading-categories\">{categories_html}</ul>
         <p class=\"reading-source\"><a href=\"{escape(readings.source_url)}\">USCCB source page</a></p>
       </header>
       <section class=\"chapter-list\">
@@ -238,7 +272,7 @@ def render_title_page_xhtml(readings: MassReadings, chapter_docs: list[dict[str,
 
 
 def render_chapter_xhtml(readings: MassReadings, section: ReadingSection) -> str:
-    text_html = text_to_html(section.text, section.heading)
+    text_html = section.html or text_to_html(section.text, section.heading)
     return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">
   <head>
@@ -261,8 +295,7 @@ def render_chapter_xhtml(readings: MassReadings, section: ReadingSection) -> str
 """
 
 
-def render_nav_xhtml(readings: MassReadings) -> str:
-    chapter_docs = build_chapter_documents(readings)
+def render_nav_xhtml(readings: MassReadings, chapter_docs: list[dict[str, object]]) -> str:
     nav_items = []
     for chapter in chapter_docs:
         nav_items.append(
@@ -314,7 +347,7 @@ def render_content_opf(
     <dc:identifier id=\"bookid\">urn:uuid:{epub_id}</dc:identifier>
     <dc:title>{escape(readings.title)}</dc:title>
     <dc:language>en</dc:language>
-    <meta name="cover" content="cover-image"/>
+    <meta name=\"cover\" content=\"cover-image\"/>
     <meta property=\"dcterms:modified\">{generated_at.isoformat().replace('+00:00', 'Z')}</meta>
   </metadata>
   <manifest>
@@ -324,7 +357,7 @@ def render_content_opf(
     {''.join(spine_items)}
   </spine>
   <guide>
-    <reference href="cover.xhtml" title="Cover" type="cover"/>
+    <reference href=\"cover.xhtml\" title=\"Cover\" type=\"cover\"/>
   </guide>
 </package>
 """
@@ -397,16 +430,18 @@ header {
   margin: 0.2em 0;
 }
 
+.reading-categories {
+  color: #555;
+  font-size: 0.95em;
+  padding-left: 1.2em;
+}
+
 .reading-citation {
   font-style: italic;
 }
 
-.reading-text {
-  white-space: pre-wrap;
-}
-
 .reading-text p {
-  margin: 0.5em 0;
+  margin: 0.75em 0;
 }
 
 .reading-section {
@@ -455,7 +490,6 @@ def format_refrain_block(lines: list[str]) -> list[str]:
                 chunks.append(f"<p>{escape(' '.join(running_lines))}</p>")
                 running_lines = []
 
-            # USCCB sometimes splits the response marker and text into separate lines.
             response_line = line
             marker_only = line == "R." or bool(re.fullmatch(r"R\.\s*\([^)]*\)", line))
             if marker_only and (index + 1) < len(lines) and not lines[index + 1].startswith("R."):

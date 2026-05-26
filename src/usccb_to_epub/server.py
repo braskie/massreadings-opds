@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import mimetypes
 import shutil
-import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from http import HTTPStatus
@@ -13,21 +12,29 @@ from typing import Any
 from urllib.parse import quote, unquote, urlparse
 from xml.etree import ElementTree as ET
 
-from .epub import build_book_files
-from .scraper import fetch_readings
+from .epub import build_book_files_for_date, slugify
+from .scraper import fetch_readings_for_date
+from .sync import eastern_today
 
 ATOM_NS = "http://www.w3.org/2005/Atom"
 OPDS_NS = "http://opds-spec.org/2010/catalog"
+CATEGORY_GROUPS = (
+    ("Daily Readings", "daily"),
+    ("Sunday Readings", "sunday"),
+    ("Special/Optional Readings", "special-optional"),
+)
 
 
 @dataclass(frozen=True)
 class LibraryRecord:
     reading_date: str
     title: str
+    slug: str
     lectionary: str | None
     source_url: str
     epub_file: str
     generated_at: str
+    categories: tuple[str, ...]
     sections: list[dict[str, Any]]
 
     @property
@@ -37,20 +44,26 @@ class LibraryRecord:
             return f"Lectionary {self.lectionary}; {section_titles}"
         return section_titles
 
+    @property
+    def entry_id(self) -> str:
+        return f"urn:uuid:{self.slug}"
+
 
 class LibraryStore:
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
+    def ensure_books(self, reading_date: date) -> list[Path]:
+        existing = self.records_for_date(reading_date)
+        if existing and all(self.epub_path(record.epub_file).exists() for record in existing):
+            return [self.epub_path(record.epub_file) for record in existing]
+        readings_items = fetch_readings_for_date(reading_date, cache_dir=self.root)
+        files = build_book_files_for_date(readings_items, self.root)
+        return [item.epub_path for item in files]
+
     def ensure_book(self, reading_date: date) -> Path:
-        metadata_path = self.metadata_path(reading_date)
-        epub_path = self.epub_path_for_metadata(metadata_path)
-        if metadata_path.exists() and epub_path.exists():
-            return epub_path
-        readings = fetch_readings(reading_date, cache_dir=self.root)
-        files = build_book_files(readings, self.root)
-        return files.epub_path
+        return self.ensure_books(reading_date)[0]
 
     def list_records(self) -> list[LibraryRecord]:
         records: list[LibraryRecord] = []
@@ -61,40 +74,25 @@ class LibraryStore:
                     LibraryRecord(
                         reading_date=data["date"],
                         title=data["title"],
+                        slug=str(data.get("slug") or slugify(f"{data['date']}-{data['title']}")),
                         lectionary=data.get("lectionary"),
                         source_url=data["source_url"],
                         epub_file=data["epub_file"],
                         generated_at=data["generated_at"],
+                        categories=tuple(data.get("categories") or infer_categories(data["date"], False)),
                         sections=list(data.get("sections", [])),
                     )
                 )
             except (OSError, json.JSONDecodeError, KeyError, TypeError):
                 continue
-        return records
+        return sorted(records, key=lambda record: (record.reading_date, record.title), reverse=True)
 
-    def metadata_path(self, reading_date: date) -> Path:
-        return self.root / f"{reading_date.isoformat()}.json"
-
-    def epub_path_for_metadata(self, metadata_path: Path) -> Path:
-        data = json.loads(metadata_path.read_text(encoding="utf-8"))
-        return self.root / data["epub_file"]
+    def records_for_date(self, reading_date: date) -> list[LibraryRecord]:
+        date_text = reading_date.isoformat()
+        return [record for record in self.list_records() if record.reading_date == date_text]
 
     def epub_path(self, epub_file: str) -> Path:
         return self.root / epub_file
-
-
-def record_mass_group(record: LibraryRecord) -> str:
-    reading_date = date.fromisoformat(record.reading_date)
-    return "Sunday Masses" if reading_date.weekday() == 6 else "Weekday Masses"
-
-
-def grouped_records(records: list[LibraryRecord]) -> list[tuple[str, list[LibraryRecord]]]:
-    sunday_records = [record for record in records if record_mass_group(record) == "Sunday Masses"]
-    weekday_records = [record for record in records if record_mass_group(record) == "Weekday Masses"]
-    return [
-        ("Sunday Masses", sunday_records),
-        ("Weekday Masses", weekday_records),
-    ]
 
 
 class OPDSRequestHandler(BaseHTTPRequestHandler):
@@ -193,6 +191,24 @@ class OPDSServer:
         self.httpd.shutdown()
 
 
+def grouped_records(records: list[LibraryRecord]) -> list[tuple[str, list[LibraryRecord]]]:
+    grouped: list[tuple[str, list[LibraryRecord]]] = []
+    for title, category in CATEGORY_GROUPS:
+        group_records = [record for record in records if category in record.categories]
+        grouped.append((title, group_records))
+    return grouped
+
+
+def infer_categories(reading_date: str, special_optional: bool) -> tuple[str, ...]:
+    parsed_date = date.fromisoformat(reading_date)
+    categories = ["daily"]
+    if parsed_date.weekday() == 6:
+        categories.append("sunday")
+    if special_optional:
+        categories.append("special-optional")
+    return tuple(categories)
+
+
 def render_index_html(
     records: list[LibraryRecord],
     opds_href: str,
@@ -205,7 +221,7 @@ def render_index_html(
             book_items = []
             for record in group_records:
                 book_items.append(
-                    f'<li><a href="{book_base_href.rstrip('/')}/{quote(record.epub_file)}">{escape_html(record.reading_date)} - {escape_html(record.title)}</a></li>'
+                    f'<li><a href="{book_base_href.rstrip("/")}/{quote(record.epub_file)}">{escape_html(record.reading_date)} - {escape_html(record.title)}</a></li>'
                 )
             grouped_items.append(
                 f"""
@@ -267,20 +283,22 @@ def render_opds_feed_xml(records: list[LibraryRecord], base_url: str) -> str:
     )
 
     for record in records:
-        group_title = record_mass_group(record)
         entry = ET.SubElement(feed, f"{{{ATOM_NS}}}entry")
         ET.SubElement(entry, f"{{{ATOM_NS}}}title").text = record.title
-        ET.SubElement(entry, f"{{{ATOM_NS}}}id").text = f"urn:uuid:{record.reading_date}"
+        ET.SubElement(entry, f"{{{ATOM_NS}}}id").text = record.entry_id
         ET.SubElement(entry, f"{{{ATOM_NS}}}updated").text = record.generated_at
         ET.SubElement(entry, f"{{{ATOM_NS}}}summary").text = record.summary
-        ET.SubElement(
-            entry,
-            f"{{{ATOM_NS}}}category",
-            {
-                "term": group_title.lower().replace(" ", "-"),
-                "label": group_title,
-            },
-        )
+        for label, category in CATEGORY_GROUPS:
+            if category not in record.categories:
+                continue
+            ET.SubElement(
+                entry,
+                f"{{{ATOM_NS}}}category",
+                {
+                    "term": category,
+                    "label": label,
+                },
+            )
         ET.SubElement(
             entry,
             f"{{{ATOM_NS}}}link",
@@ -337,7 +355,7 @@ def publish_static_opds(library_dir: Path, output_dir: Path, site_url: str) -> t
 def parse_date_text(value: str) -> date:
     cleaned = value.strip().lower()
     if cleaned == "today":
-        return date.today()
+        return eastern_today()
 
     for format_string in ("%Y-%m-%d", "%m%d%y", "%Y%m%d"):
         try:
