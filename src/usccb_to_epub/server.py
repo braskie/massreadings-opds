@@ -83,6 +83,20 @@ class LibraryStore:
         return self.root / epub_file
 
 
+def record_mass_group(record: LibraryRecord) -> str:
+    reading_date = date.fromisoformat(record.reading_date)
+    return "Sunday Masses" if reading_date.weekday() == 6 else "Weekday Masses"
+
+
+def grouped_records(records: list[LibraryRecord]) -> list[tuple[str, list[LibraryRecord]]]:
+    sunday_records = [record for record in records if record_mass_group(record) == "Sunday Masses"]
+    weekday_records = [record for record in records if record_mass_group(record) == "Weekday Masses"]
+    return [
+        ("Sunday Masses", sunday_records),
+        ("Weekday Masses", weekday_records),
+    ]
+
+
 class OPDSRequestHandler(BaseHTTPRequestHandler):
     library: LibraryStore
 
@@ -185,13 +199,26 @@ def render_index_html(
     book_base_href: str,
     include_generate: bool,
 ) -> str:
-    book_items = []
-    for record in records:
-        book_items.append(
-            f'<li><a href="{book_base_href.rstrip('/')}/{quote(record.epub_file)}">{escape_html(record.reading_date)} - {escape_html(record.title)}</a></li>'
-        )
-    if not book_items:
-        book_items.append("<li>No EPUB files have been generated yet.</li>")
+    if records:
+        grouped_items = []
+        for group_title, group_records in grouped_records(records):
+            book_items = []
+            for record in group_records:
+                book_items.append(
+                    f'<li><a href="{book_base_href.rstrip('/')}/{quote(record.epub_file)}">{escape_html(record.reading_date)} - {escape_html(record.title)}</a></li>'
+                )
+            grouped_items.append(
+                f"""
+    <section>
+      <h2>{escape_html(group_title)}</h2>
+      <ul>
+        {''.join(book_items) if book_items else '<li>No EPUB files have been generated yet.</li>'}
+      </ul>
+    </section>"""
+            )
+        catalog_body = ''.join(grouped_items)
+    else:
+        catalog_body = "<p>No EPUB files have been generated yet.</p>"
 
     generate_link = '<p><a href="/generate/today">Generate today\'s reading</a></p>' if include_generate else ""
 
@@ -210,9 +237,7 @@ def render_index_html(
     <p><a href=\"{escape_html(opds_href)}\">OPDS catalog</a></p>
     {generate_link}
     <h2>Available EPUB files</h2>
-    <ul>
-      {''.join(book_items)}
-    </ul>
+        {catalog_body}
   </body>
 </html>
 """
@@ -242,11 +267,20 @@ def render_opds_feed_xml(records: list[LibraryRecord], base_url: str) -> str:
     )
 
     for record in records:
+        group_title = record_mass_group(record)
         entry = ET.SubElement(feed, f"{{{ATOM_NS}}}entry")
         ET.SubElement(entry, f"{{{ATOM_NS}}}title").text = record.title
         ET.SubElement(entry, f"{{{ATOM_NS}}}id").text = f"urn:uuid:{record.reading_date}"
         ET.SubElement(entry, f"{{{ATOM_NS}}}updated").text = record.generated_at
         ET.SubElement(entry, f"{{{ATOM_NS}}}summary").text = record.summary
+        ET.SubElement(
+            entry,
+            f"{{{ATOM_NS}}}category",
+            {
+                "term": group_title.lower().replace(" ", "-"),
+                "label": group_title,
+            },
+        )
         ET.SubElement(
             entry,
             f"{{{ATOM_NS}}}link",

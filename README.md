@@ -16,6 +16,9 @@ This writes:
 - `docs/opds.xml`
 - `docs/books/*.epub`
 
+The published catalog groups entries into Sunday Masses and Weekday Masses.
+The GitHub Actions workflow also builds readings for today plus the next 13 days before publishing.
+
 To publish on GitHub Pages:
 
 1. Commit and push your repository, including `data/library` book files.
