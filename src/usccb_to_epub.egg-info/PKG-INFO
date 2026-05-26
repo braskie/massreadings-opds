@@ -15,9 +15,10 @@ Scrape the USCCB daily mass readings page, build EPUB files, and serve them in a
 
 ## Static OPDS for GitHub Pages
 
-Generate a static catalog and copy EPUB files into `docs/`:
+Refresh the rolling reading window and publish a static catalog:
 
 ```bash
+python -m usccb_to_epub sync
 python -m usccb_to_epub publish-static --site-url https://YOUR_USER.github.io/YOUR_REPO
 ```
 
@@ -27,14 +28,16 @@ This writes:
 - `docs/opds.xml`
 - `docs/books/*.epub`
 
-The published catalog groups entries into Sunday Masses and Weekday Masses.
-The GitHub Actions workflow also builds readings for today plus the next 13 days before publishing.
+The published catalog groups entries into Daily Readings, Sunday Readings, and Special/Optional Readings.
+Sundays appear in both the Daily and Sunday sections.
+The rolling window is computed in `America/New_York` and includes the previous 7 days through the next 14 days, inclusive.
+The sync step prunes generated EPUB/JSON files outside that window from `data/library/`, and publishing rewrites `docs/books/` from the current library.
 
 To publish on GitHub Pages:
 
-1. Commit and push your repository, including `data/library` book files.
+1. Commit and push your repository.
 2. In GitHub, open Settings > Pages and set Source to `GitHub Actions`.
-3. The workflow in `.github/workflows/deploy-pages.yml` will publish `docs/`.
+3. The workflow in `.github/workflows/deploy-pages.yml` will refresh the library and publish `docs/`.
 
 Your OPDS feed URL will be:
 
@@ -48,13 +51,26 @@ Build today's readings:
 python -m usccb_to_epub build
 ```
 
-If a matching `data/library/YYYY-MM-DD.json` metadata file already exists, the build reuses cached readings metadata instead of requesting the USCCB page again.
-
 Build a specific date:
 
 ```bash
 python -m usccb_to_epub build --date 2026-05-31
 ```
+
+Refresh the default rolling window:
+
+```bash
+python -m usccb_to_epub sync
+```
+
+Refresh a custom window around a specific anchor date:
+
+```bash
+python -m usccb_to_epub sync --date 2026-05-31 --past-days 3 --future-days 10
+```
+
+If matching `data/library/*.json` metadata files already exist, build and sync commands reuse cached readings metadata unless `--refresh` is supplied.
+When USCCB pages expose multiple Mass variants for a single date, the tool generates one EPUB per Mass title. Generated files are named with the date and Mass name.
 
 Serve an OPDS catalog:
 
