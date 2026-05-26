@@ -12,6 +12,33 @@ Requires-Dist: curl-cffi>=0.15.0
 
 Scrape the USCCB daily mass readings page, build EPUB files, and serve them in an OPDS catalog.
 
+## Static OPDS for GitHub Pages
+
+Generate a static catalog and copy EPUB files into `docs/`:
+
+```bash
+python -m usccb_to_epub publish-static --site-url https://YOUR_USER.github.io/YOUR_REPO
+```
+
+This writes:
+
+- `docs/index.html`
+- `docs/opds.xml`
+- `docs/books/*.epub`
+
+The published catalog groups entries into Sunday Masses and Weekday Masses.
+The GitHub Actions workflow also builds readings for today plus the next 13 days before publishing.
+
+To publish on GitHub Pages:
+
+1. Commit and push your repository, including `data/library` book files.
+2. In GitHub, open Settings > Pages and set Source to `GitHub Actions`.
+3. The workflow in `.github/workflows/deploy-pages.yml` will publish `docs/`.
+
+Your OPDS feed URL will be:
+
+`https://YOUR_USER.github.io/YOUR_REPO/opds.xml`
+
 ## Usage
 
 Build today's readings:
