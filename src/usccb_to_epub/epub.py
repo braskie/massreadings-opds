@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import re
 import uuid
 import zipfile
@@ -8,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
+
+from PIL import Image, ImageDraw, ImageFont
 
 from .scraper import MassReadings, ReadingSection
 
@@ -61,7 +64,7 @@ def build_metadata(readings: MassReadings, epub_filename: str, generated_at: dat
 def write_epub(readings: MassReadings, epub_path: Path, generated_at: datetime) -> None:
     epub_id = uuid.uuid5(uuid.NAMESPACE_URL, f"{readings.source_url}|{readings.reading_date.isoformat()}")
     chapter_docs = build_chapter_documents(readings)
-    cover_svg = render_cover_svg(readings)
+    cover_image = render_cover_image(readings)
     cover_page_xhtml = render_cover_page_xhtml(readings)
     title_page_xhtml = render_title_page_xhtml(readings, chapter_docs)
     nav_xhtml = render_nav_xhtml(readings)
@@ -76,7 +79,7 @@ def write_epub(readings: MassReadings, epub_path: Path, generated_at: datetime) 
         archive.writestr("META-INF/container.xml", container_xml)
         archive.writestr("OEBPS/style.css", stylesheet)
         archive.writestr("OEBPS/nav.xhtml", nav_xhtml)
-        archive.writestr("OEBPS/cover.svg", cover_svg)
+        archive.writestr("OEBPS/cover.jpg", cover_image)
         archive.writestr("OEBPS/cover.xhtml", cover_page_xhtml)
         archive.writestr("OEBPS/title.xhtml", title_page_xhtml)
         for chapter in chapter_docs:
@@ -109,40 +112,77 @@ def render_cover_page_xhtml(readings: MassReadings) -> str:
   </head>
   <body>
     <section class=\"cover-page\" epub:type=\"cover\">
-      <img src=\"cover.svg\" alt=\"Cover for {escape(readings.title)}\" class=\"cover-image\"/>
+      <img src=\"cover.jpg\" alt=\"Cover for {escape(readings.title)}\" class=\"cover-image\"/>
     </section>
   </body>
 </html>
 """
 
 
-def render_cover_svg(readings: MassReadings) -> str:
-    title_lines = split_cover_title(readings.title, max_chars=28)
-    title_tspans = []
+def render_cover_image(readings: MassReadings) -> bytes:
+    width = 1200
+    height = 1800
+    image = Image.new("RGB", (width, height), "#12263A")
+    draw = ImageDraw.Draw(image)
+
+    for y in range(height):
+        blend = y / max(height - 1, 1)
+        red = int(0x12 + (0x2A - 0x12) * blend)
+        green = int(0x26 + (0x4A - 0x26) * blend)
+        blue = int(0x3A + (0x68 - 0x3A) * blend)
+        draw.line([(0, y), (width, y)], fill=(red, green, blue))
+
+    accent = "#E6D5A8"
+    draw.rectangle((96, 96, width - 96, height - 96), outline=accent, width=4)
+
+    header_font = load_cover_font(72, bold=True)
+    title_font = load_cover_font(58, bold=True)
+    date_font = load_cover_font(48)
+    subtitle_font = load_cover_font(34)
+
+    draw.text((width / 2, 300), "CATHOLIC MASS", fill=accent, font=header_font, anchor="mm")
+    draw.text((width / 2, 385), "READINGS", fill=accent, font=header_font, anchor="mm")
+    draw.line((260, 460, width - 260, 460), fill=accent, width=3)
+
+    title_lines = split_cover_title(readings.title, max_chars=26)
+    title_top = 600
+    line_height = 80
     for index, line in enumerate(title_lines):
-        dy = "0" if index == 0 else "1.25em"
-        title_tspans.append(f'<tspan x="600" dy="{dy}">{escape(line)}</tspan>')
+        y_position = title_top + (index * line_height)
+        draw.text((width / 2, y_position), line, fill="#FFFFFF", font=title_font, anchor="mm")
 
+    draw.text((width / 2, 1450), readings.reading_date.isoformat(), fill=accent, font=date_font, anchor="mm")
     lectionary_text = f"Lectionary {readings.lectionary}" if readings.lectionary else "Daily Readings"
+    draw.text((width / 2, 1530), lectionary_text, fill=accent, font=subtitle_font, anchor="mm")
 
-    return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1200\" height=\"1800\" viewBox=\"0 0 1200 1800\" role=\"img\" aria-label=\"Cover image for {escape(readings.title)}\">
-  <defs>
-    <linearGradient id=\"bg\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\">
-      <stop offset=\"0%\" stop-color=\"#12263A\"/>
-      <stop offset=\"100%\" stop-color=\"#2A4A68\"/>
-    </linearGradient>
-  </defs>
-  <rect x=\"0\" y=\"0\" width=\"1200\" height=\"1800\" fill=\"url(#bg)\"/>
-  <rect x=\"96\" y=\"96\" width=\"1008\" height=\"1608\" fill=\"none\" stroke=\"#E6D5A8\" stroke-width=\"3\"/>
-  <text x=\"600\" y=\"320\" text-anchor=\"middle\" fill=\"#E6D5A8\" font-size=\"56\" font-family=\"Georgia, serif\" letter-spacing=\"2\">CATHOLIC MASS</text>
-  <text x=\"600\" y=\"390\" text-anchor=\"middle\" fill=\"#E6D5A8\" font-size=\"56\" font-family=\"Georgia, serif\" letter-spacing=\"2\">READINGS</text>
-  <line x1=\"260\" y1=\"460\" x2=\"940\" y2=\"460\" stroke=\"#E6D5A8\" stroke-width=\"2\"/>
-  <text x=\"600\" y=\"620\" text-anchor=\"middle\" fill=\"#FFFFFF\" font-size=\"70\" font-family=\"Georgia, serif\" font-style=\"italic\">{''.join(title_tspans)}</text>
-  <text x=\"600\" y=\"1450\" text-anchor=\"middle\" fill=\"#E6D5A8\" font-size=\"44\" font-family=\"Georgia, serif\">{escape(readings.reading_date.isoformat())}</text>
-  <text x=\"600\" y=\"1520\" text-anchor=\"middle\" fill=\"#E6D5A8\" font-size=\"34\" font-family=\"Georgia, serif\">{escape(lectionary_text)}</text>
-</svg>
-"""
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=92, optimize=True, progressive=True)
+    return output.getvalue()
+
+
+def load_cover_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidate_paths = []
+    if bold:
+        candidate_paths.extend(
+            [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            ]
+        )
+    candidate_paths.extend(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+    )
+
+    for font_path in candidate_paths:
+        try:
+            return ImageFont.truetype(font_path, size=size)
+        except OSError:
+            continue
+
+    return ImageFont.load_default()
 
 
 def split_cover_title(title: str, max_chars: int = 28) -> list[str]:
@@ -257,8 +297,8 @@ def render_content_opf(
     manifest_items = [
         '<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>',
         '<item id="stylesheet" href="style.css" media-type="text/css"/>',
-      '<item id="cover-image" href="cover.svg" media-type="image/svg+xml" properties="cover-image"/>',
-      '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>',
+        '<item id="cover-image" href="cover.jpg" media-type="image/jpeg" properties="cover-image"/>',
+        '<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>',
         '<item id="title" href="title.xhtml" media-type="application/xhtml+xml"/>',
     ]
     spine_items = ['<itemref idref="cover"/>', '<itemref idref="title"/>']
@@ -283,6 +323,9 @@ def render_content_opf(
   <spine>
     {''.join(spine_items)}
   </spine>
+  <guide>
+    <reference href="cover.xhtml" title="Cover" type="cover"/>
+  </guide>
 </package>
 """
 
