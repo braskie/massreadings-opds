@@ -15,7 +15,7 @@ DEFAULT_LIBRARY_DIR = Path("data") / "library"
 
 def build_command(args: argparse.Namespace) -> int:
     reading_date = parse_date_text(args.date) if args.date else date.today()
-    readings = fetch_readings(reading_date)
+    readings = fetch_readings(reading_date, cache_dir=args.output_dir)
     files = build_book_files(readings, args.output_dir)
     print(files.epub_path)
     print(files.metadata_path)

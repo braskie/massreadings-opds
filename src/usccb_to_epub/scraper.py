@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
@@ -9,6 +11,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests
 
 USCCB_READINGS_URL = "https://bible.usccb.org/bible/readings/{slug}.cfm"
+DEFAULT_CACHE_DIR = Path("data") / "library"
 READING_HEADINGS: tuple[str, ...] = (
     "Reading 1",
     "Responsorial Psalm",
@@ -107,10 +110,49 @@ def parse_readings_html(html: str, source_url: str, reading_date: date) -> MassR
     )
 
 
-def fetch_readings(reading_date: date, timeout: int = 30) -> MassReadings:
+def fetch_readings(
+    reading_date: date,
+    timeout: int = 30,
+    cache_dir: Path | None = DEFAULT_CACHE_DIR,
+) -> MassReadings:
+    if cache_dir is not None:
+        cached = load_cached_readings(reading_date, cache_dir)
+        if cached is not None:
+            return cached
+
     source_url = readings_url(reading_date)
     html = fetch_readings_html(reading_date, timeout=timeout)
     return parse_readings_html(html, source_url, reading_date)
+
+
+def load_cached_readings(reading_date: date, cache_dir: Path) -> MassReadings | None:
+    metadata_path = cache_dir / f"{reading_date.isoformat()}.json"
+    if not metadata_path.exists():
+        return None
+
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        sections_data = list(data.get("sections", []))
+        sections = [
+            ReadingSection(
+                heading=str(section["heading"]),
+                source_label=str(section["source_label"]),
+                source_url=str(section["source_url"]),
+                text=str(section["text"]),
+            )
+            for section in sections_data
+        ]
+        if not sections:
+            return None
+        return MassReadings(
+            reading_date=reading_date,
+            title=str(data["title"]),
+            lectionary=str(data["lectionary"]) if data.get("lectionary") else None,
+            source_url=str(data["source_url"]),
+            sections=sections,
+        )
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 def normalize_text(text: str) -> str:

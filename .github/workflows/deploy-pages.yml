@@ -41,7 +41,7 @@ jobs:
           library_dir = Path('data/library')
           for offset in range(14):
               reading_date = date.today() + timedelta(days=offset)
-              readings = fetch_readings(reading_date)
+              readings = fetch_readings(reading_date, cache_dir=library_dir)
               build_book_files(readings, library_dir)
           PY
 
