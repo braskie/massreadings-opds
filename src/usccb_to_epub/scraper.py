@@ -4,13 +4,17 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-USCCB_READINGS_URL = "https://bible.usccb.org/bible/readings/{slug}.cfm"
+USCCB_READINGS_URLS: tuple[str, ...] = (
+    "https://bible.usccb.org/bible/readings/{slug}.cfm",
+    "https://www.usccb.org/bible/readings/{slug}.cfm",
+)
 DEFAULT_CACHE_DIR = Path("data") / "library"
 READING_HEADINGS: tuple[str, ...] = (
     "Reading 1",
@@ -38,30 +42,60 @@ class MassReadings:
     sections: list[ReadingSection]
 
 
+def readings_urls(reading_date: date) -> tuple[str, ...]:
+    slug = reading_date.strftime("%m%d%y")
+    return tuple(template.format(slug=slug) for template in USCCB_READINGS_URLS)
+
+
 def readings_url(reading_date: date) -> str:
-    return USCCB_READINGS_URL.format(slug=reading_date.strftime("%m%d%y"))
+    return readings_urls(reading_date)[0]
 
 
-def fetch_readings_html(reading_date: date, timeout: int = 30) -> str:
-    url = readings_url(reading_date)
-    try:
-        response = requests.get(url, impersonate="chrome124", timeout=timeout)
-        response.raise_for_status()
-        return response.text
-    except Exception:
-        request = Request(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
-            },
-        )
-        with urlopen(request, timeout=timeout) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset, errors="replace")
+def request_headers(source_url: str) -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": source_url,
+    }
+
+
+def fetch_readings_html(reading_date: date, timeout: int = 30) -> tuple[str, str]:
+    last_error: Exception | None = None
+    for source_url in readings_urls(reading_date):
+        headers = request_headers(source_url)
+        try:
+            response = requests.get(
+                source_url,
+                impersonate="chrome124",
+                headers=headers,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response.text, source_url
+        except Exception as exc:
+            last_error = exc
+
+        request = Request(source_url, headers=headers)
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                return response.read().decode(charset, errors="replace"), source_url
+        except HTTPError as exc:
+            last_error = exc
+            if exc.code == 403:
+                continue
+            raise
+        except Exception as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Unable to fetch readings page")
 
 
 def parse_readings_html(html: str, source_url: str, reading_date: date) -> MassReadings:
@@ -120,8 +154,7 @@ def fetch_readings(
         if cached is not None:
             return cached
 
-    source_url = readings_url(reading_date)
-    html = fetch_readings_html(reading_date, timeout=timeout)
+    html, source_url = fetch_readings_html(reading_date, timeout=timeout)
     return parse_readings_html(html, source_url, reading_date)
 
 

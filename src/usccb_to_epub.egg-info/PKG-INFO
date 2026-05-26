@@ -7,6 +7,7 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: beautifulsoup4>=4.12
 Requires-Dist: curl-cffi>=0.15.0
+Requires-Dist: Pillow>=10.0
 
 # USCCB to EPUB
 
@@ -46,6 +47,8 @@ Build today's readings:
 ```bash
 python -m usccb_to_epub build
 ```
+
+If a matching `data/library/YYYY-MM-DD.json` metadata file already exists, the build reuses cached readings metadata instead of requesting the USCCB page again.
 
 Build a specific date:
 
