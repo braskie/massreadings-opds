@@ -37,7 +37,7 @@ To publish on GitHub Pages:
 
 1. Commit and push your repository.
 2. In GitHub, open Settings > Pages and set Source to `GitHub Actions`.
-3. The workflow in `/tmp/workspace/braskie/massreadings-opds/.github/workflows/deploy-pages.yml` will refresh the library and publish `docs/`.
+3. The workflow in `.github/workflows/deploy-pages.yml` will refresh the library and publish `docs/`.
 
 Your OPDS feed URL will be:
 

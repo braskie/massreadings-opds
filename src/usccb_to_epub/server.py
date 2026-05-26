@@ -107,8 +107,8 @@ class OPDSRequestHandler(BaseHTTPRequestHandler):
             self.respond_html(self.render_index())
             return
 
-        category = opds_category_from_path(path)
-        if category is not False:
+        is_opds_path, category = opds_category_from_path(path)
+        if is_opds_path:
             self.respond_xml(self.render_opds_feed(category))
             return
 
@@ -201,15 +201,15 @@ def grouped_records(records: list[LibraryRecord]) -> list[tuple[str, list[Librar
     return grouped
 
 
-def opds_category_from_path(path: str) -> str | None | bool:
+def opds_category_from_path(path: str) -> tuple[bool, str | None]:
     if path == OPDS_ROOT_FEED_PATH:
-        return None
+        return True, None
 
     for _, category in CATEGORY_GROUPS:
         if path == opds_feed_path(category):
-            return category
+            return True, category
 
-    return False
+    return False, None
 
 
 def opds_feed_path(category: str | None) -> str:
