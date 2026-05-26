@@ -1,31 +1,49 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .epub import build_book_files
-from .scraper import fetch_readings
+from .epub import build_book_files_for_date
+from .scraper import fetch_readings_for_date
 from .server import OPDSServer, parse_date_text, publish_static_opds
-
+from .sync import DEFAULT_FUTURE_DAYS, DEFAULT_PAST_DAYS, eastern_today, sync_library
 
 DEFAULT_LIBRARY_DIR = Path("data") / "library"
 
 
 def build_command(args: argparse.Namespace) -> int:
-    reading_date = parse_date_text(args.date) if args.date else date.today()
-    readings = fetch_readings(reading_date, cache_dir=args.output_dir)
-    files = build_book_files(readings, args.output_dir)
-    print(files.epub_path)
-    print(files.metadata_path)
+    reading_date = parse_date_text(args.date) if args.date else eastern_today()
+    readings_items = fetch_readings_for_date(reading_date, cache_dir=args.output_dir, force_refresh=args.refresh)
+    files = build_book_files_for_date(readings_items, args.output_dir)
+    for item in files:
+        print(item.epub_path)
+        print(item.metadata_path)
+    return 0
+
+
+def sync_command(args: argparse.Namespace) -> int:
+    anchor_date = parse_date_text(args.date) if args.date else None
+    result = sync_library(
+        args.library_dir,
+        anchor_date=anchor_date,
+        past_days=args.past_days,
+        future_days=args.future_days,
+        refresh=args.refresh,
+    )
+    print(f"Generated {len(result.generated)} artifacts")
+    print(f"Pruned {len(result.pruned)} stale files")
+    if result.failures:
+        print("Failed dates:")
+        for reading_date, message in result.failures:
+            print(f"- {reading_date.isoformat()}: {message}")
     return 0
 
 
 def serve_command(args: argparse.Namespace) -> int:
     server = OPDSServer(args.library_dir, host=args.host, port=args.port)
     if args.build_today:
-        server.library.ensure_book(date.today())
+        server.library.ensure_book(eastern_today())
     print(f"Serving OPDS catalog on http://{args.host}:{args.port}/opds.xml")
     try:
         server.serve_forever()
@@ -54,7 +72,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Scrape USCCB readings and publish EPUB files through OPDS.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    build_parser = subparsers.add_parser("build", help="Build an EPUB for a date")
+    build_parser = subparsers.add_parser("build", help="Build EPUB files for a date")
     build_parser.add_argument("--date", help="Date to fetch, accepts YYYY-MM-DD, MMDDYY, YYYYMMDD, or today")
     build_parser.add_argument(
         "--output-dir",
@@ -62,7 +80,22 @@ def make_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LIBRARY_DIR,
         help="Directory that stores the generated EPUB and metadata files",
     )
+    build_parser.add_argument("--refresh", action="store_true", help="Ignore cached metadata and refresh from USCCB when possible")
     build_parser.set_defaults(func=build_command)
+
+    sync_parser = subparsers.add_parser("sync", help="Build the rolling reading window and prune stale files")
+    sync_parser.add_argument("--date", help="Anchor date for the rolling window; defaults to Eastern today")
+    sync_parser.add_argument(
+        "--library-dir",
+        type=Path,
+        default=DEFAULT_LIBRARY_DIR,
+        help="Directory with generated EPUB and metadata files",
+    )
+    sync_parser.add_argument("--past-days", type=int, default=DEFAULT_PAST_DAYS, help="Days to keep before the anchor date")
+    sync_parser.add_argument("--future-days", type=int, default=DEFAULT_FUTURE_DAYS, help="Days to keep after the anchor date")
+    sync_parser.add_argument("--refresh", action="store_true", default=True, help="Refresh dates from USCCB before falling back to cache")
+    sync_parser.add_argument("--no-refresh", action="store_false", dest="refresh", help="Use cached metadata when available")
+    sync_parser.set_defaults(func=sync_command)
 
     serve_parser = subparsers.add_parser("serve", help="Serve an OPDS catalog")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Host address to bind")
